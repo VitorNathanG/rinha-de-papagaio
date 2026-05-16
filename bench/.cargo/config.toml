@@ -1,0 +1,5 @@
+# Target the x86-64-v3 microarch level (AVX2+FMA+BMI2) — matches Haswell, which
+# is the rinha test machine (Mac Mini Late 2014), and runs on any modern x86_64.
+# Stays portable while letting the compiler emit AVX2/FMA freely.
+[build]
+rustflags = ["-C", "target-cpu=x86-64-v3"]

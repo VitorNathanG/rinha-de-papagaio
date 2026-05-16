@@ -1,8 +1,15 @@
 data/
 logs/
+profile-out/
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# Rust build artifacts (both bench/ and backend/ crates).
+target/
+
+# k6 writes the rinha results.json here when run from this dir.
+test/results.json
 
 # uv.lock IS committed — do not ignore it

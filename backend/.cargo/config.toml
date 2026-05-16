@@ -1,0 +1,4 @@
+# x86-64-v3 = AVX2 + FMA + BMI2. Matches the rinha test machine (Haswell)
+# and runs unchanged on any modern x86_64.
+[build]
+rustflags = ["-C", "target-cpu=x86-64-v3"]

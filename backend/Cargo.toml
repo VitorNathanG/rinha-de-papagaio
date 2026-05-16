@@ -1,0 +1,28 @@
+[package]
+name = "papagaio-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "macros"] }
+hyper = { version = "1", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+bytemuck = "1.18"
+libm = "0.2"
+memchr = "2.7"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Same codegen as release but keeps line tables so `perf` / flamegraphs
+# resolve symbols. Build with `cargo build --profile profiling`.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
