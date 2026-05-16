@@ -1,0 +1,45 @@
+[project]
+name = "papagaio"
+version = "0.1.0"
+description = "Feasibility study: destilling 5-NN over 3M reference vectors into a small MLP for Rinha de Backend 2026."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26",
+    "torch>=2.2",
+    # Transitive of torch on linux/x86_64, but uv only honours `tool.uv.sources`
+    # for *direct* deps — without this line the resolver falls back to PyPI,
+    # where the ROCm wheel doesn't exist, and uv sync fails.
+    "triton-rocm; platform_machine == 'x86_64' and sys_platform == 'linux'",
+]
+
+# --- Torch wheel routing ----------------------------------------------------
+# PyTorch publishes platform-specific wheels (ROCm, CUDA, CPU) from its own
+# index, not from PyPI. We declare an extra index and pin BOTH torch and its
+# transitive helper (pytorch-triton-rocm) to it, so `uv sync` pulls the right
+# binaries.
+#
+# Default below targets ROCm 7.2 on linux-amd64 (RDNA4 / gfx1201 production
+# support landed in 7.2.0). Change the index URL if your ROCm differs, or swap
+# the index alias for CUDA/CPU.
+# Pick one of these URLs:
+#   ROCm 6.2   https://download.pytorch.org/whl/rocm6.2   (torch up to ~2.6)
+#   ROCm 6.4   https://download.pytorch.org/whl/rocm6.4   (RDNA4 preview)
+#   ROCm 7.2   https://download.pytorch.org/whl/rocm7.2   (default; RDNA4 GA)
+#   CUDA 12.1  https://download.pytorch.org/whl/cu121     (also swap
+#                                                          triton-rocm for
+#                                                          pytorch-triton)
+#   CPU only   https://download.pytorch.org/whl/cpu       (drop triton routing)
+# Note: torch >= 2.11 renamed its triton transitive from `pytorch-triton-rocm`
+# to `triton-rocm`. The dep list and [tool.uv.sources] below use the new name.
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch", marker = "sys_platform == 'linux'" },
+]
+triton-rocm = [
+    { index = "pytorch", marker = "sys_platform == 'linux'" },
+]
