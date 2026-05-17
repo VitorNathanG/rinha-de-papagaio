@@ -1,4 +1,7 @@
-# x86-64-v3 = AVX2 + FMA + BMI2. Matches the rinha test machine (Haswell)
-# and runs unchanged on any modern x86_64.
+# target-cpu=haswell: mesma ISA que x86-64-v3 (AVX2 + FMA + BMI2) — esses
+# bits já são o baseline da máquina da rinha — mas habilita o modelo de
+# scheduling de Haswell no LLVM (latências/portas corretas), o que melhora
+# instruction ordering no hot path. Também desbloqueia AES/PCLMUL/RDRAND
+# (irrelevantes aqui, mas vêm de graça). Não compatível com x86_64 pré-Haswell.
 [build]
-rustflags = ["-C", "target-cpu=x86-64-v3"]
+rustflags = ["-C", "target-cpu=haswell"]
