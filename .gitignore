@@ -1,5 +1,6 @@
 data/
 logs/
+log/
 profile-out/
 __pycache__/
 *.pyc

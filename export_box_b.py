@@ -35,6 +35,8 @@ Why nlist=256: keeps the centroid scan tiny (16 KB, fits L1) while giving
 ~410 refs per cluster on average — small enough that nprobe=16 touches only
 ~6.5k refs (≈ 420 KB) per query instead of all 105k (6.75 MB).
 """
+import pipeline_log
+
 import os
 import time
 
@@ -162,4 +164,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pipeline_log.setup(__file__)
     main()

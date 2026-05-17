@@ -201,8 +201,8 @@ em 3 classes. CrossEntropy com weights cobre o caso 3-class corretamente.
 
 Considerado em vez de MLP. Pros: features bounded e numéricas, decision surface piecewise-flat
 "naturalmente". Cons: tempo de inferência por árvore é cache miss bait, e o número de árvores
-necessárias para ~99.93% recall em B passa de 100. MLP de 1635 params + ~5 µs de matmul vence em
-latência por uma ordem de magnitude.
+necessárias para ~99.93% recall em B passa de 100. MLP de 5315 params + ~1,3 µs de matmul (ver
+`router_bench`) vence em latência por uma ordem de magnitude.
 
 ### D — Modelo único sobre tudo
 
@@ -219,7 +219,7 @@ Coisas que poderiam funcionar mas não foram exploradas:
   potencialmente diferente. Risco: leaking do test set.
 - **Distillation hierárquica**: um router rapido seguido de um classificador de boundary
   mais largo. Provavelmente overkill — 6000/6000 já está saturado.
-- **Quantização do router** (int8 weights). 6.5 KB já é desprezível; quantizar economiza ~3 KB
+- **Quantização do router** (int8 weights). 20,8 KB já é desprezível; quantizar economiza ~15 KB
   sem ganho relevante.
 - **Halo via k=100 / k=500 purity**. Testado durante calibração e descartado: refs no contorno
   externo de clusters *grandes* não são pegos por k mais largo (todos os k vizinhos ainda são do

@@ -45,6 +45,8 @@ Memory tuning:
 Inputs:  data/references.npy, data/labels.npy
 Output:  data/fraud_counts_k{K}.npy — shape (SUBSET or N,) uint8, values 0..K
 """
+import pipeline_log
+
 import math
 import os
 import time
@@ -180,4 +182,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pipeline_log.setup(__file__)
     main()

@@ -26,6 +26,8 @@ Usage:
     # or to skip recomputing if data/nearest_opp_dist.npy already exists:
     SKIP_COMPUTE=1 python -u nearest_opp.py
 """
+import pipeline_log
+
 import os
 import sys
 import time
@@ -118,7 +120,7 @@ def main():
         print(f"[opp] loading refs / labels / box ...", flush=True)
         refs = np.load(DATA / "references.npy").astype(np.float32)
         labels = np.load(DATA / "labels.npy")            # bool
-        box = np.load(DATA / "box_labels.npy")           # u8
+        box = np.load(DATA / "box_labels.before_halo.npy")  # u8 (pristine)
 
         N = len(refs)
         n_fraud = int(labels.sum())
@@ -179,8 +181,11 @@ def main():
         opp = out
 
     # ---- threshold sweep -------------------------------------------------
+    # Always read the pristine partition output: the sweep reports what
+    # *would* happen if halo D were applied to the original A refs, so
+    # using a post-halo box_labels.npy would understate the addable set.
     print(f"\n[opp] threshold sweep:", flush=True)
-    box = np.load(DATA / "box_labels.npy")
+    box = np.load(DATA / "box_labels.before_halo.npy")
     in_A = box != 2
     print(f"      Box-B (current): {(box == 2).sum():,}", flush=True)
     print(f"      A refs (current): {in_A.sum():,}\n", flush=True)
@@ -199,4 +204,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pipeline_log.setup(__file__)
     sys.exit(main() or 0)

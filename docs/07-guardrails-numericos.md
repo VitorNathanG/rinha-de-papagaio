@@ -144,7 +144,7 @@ opção default; Chebyshev/minimax se a precisão é crítica.
 
 ### O problema
 
-`train_router.py` aceita `HIDDEN` e `DEPTH` como env vars. Treinar com `HIDDEN=64` e re-exportar
+`train_router.py` aceita `HIDDEN` e `DEPTH` como env vars. Treinar com `HIDDEN=128` e re-exportar
 sem mudar o Rust resultaria em backend lendo lixo dos arquivos `.bin`.
 
 ### O fix
@@ -153,20 +153,21 @@ sem mudar o Rust resultaria em backend lendo lixo dos arquivos `.bin`.
 não for o esperado:
 
 ```python
-if hidden != 32 or depth != 2:
+if hidden != 64 or depth != 2:
     raise SystemExit(
-        f"Rust backend assumes hidden=32 depth=2, "
+        f"Rust backend assumes hidden=64 depth=2, "
         f"found hidden={hidden} depth={depth}"
     )
 ```
 
-Do lado Rust, as constantes são em compile time:
+Do lado Rust, as constantes são em compile time (no `backend/src/router.rs` **e** no
+`router_bench/src/main.rs`, que duplica o kernel pra ficar independente do crate backend):
 
 ```rust
 const D_IN: usize = 14;
-const H: usize = 32;
+const H: usize = 64;
 const D_OUT: usize = 3;
-pub const N_FLOATS: usize = D_IN * H + H + H * H + H + H * D_OUT + D_OUT; // 1635
+pub const N_FLOATS: usize = D_IN * H + H + H * H + H + H * D_OUT + D_OUT; // 5315
 ```
 
 E o loader valida o tamanho do arquivo:
@@ -214,7 +215,7 @@ Defesas:
 Se você mexer em algo do pipeline offline, confirme:
 
 - [ ] `train_router.py` e `backend/src/router.rs` usam a mesma ativação.
-- [ ] `HIDDEN=32` e `DEPTH=2` (o assert no exporter pega isso, mas vale checar logs).
+- [ ] `HIDDEN=64` e `DEPTH=2` (o assert no exporter pega isso, mas vale checar logs).
 - [ ] `vectorize.rs::round4` ainda está lá e ainda arredonda para 4 casas.
 - [ ] `export_box_b.py` ainda escreve refs padded para 16 floats por linha.
 - [ ] `export_box_b.py` ainda sorta por cluster antes de escrever.

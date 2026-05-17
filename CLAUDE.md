@@ -13,18 +13,18 @@ consulte `../rinha-de-backend-2026/docs/en/` para as regras canônicas (DETECTIO
 DATASET.md, EVALUATION.md).
 
 Em vez de rodar k-NN sobre os 3M refs em tempo de request, esta submissão destila o problema num
-MLP "router" minúsculo (14 → 32 → 32 → 3) mais um slow path IVF (NN aproximado) sobre um
-subconjunto curado de ~212k refs chamado **Box-B**. Score de produção atual: **6000/6000**,
-p99 ≈ 0.15 ms.
+MLP "router" pequeno (14 → 64 → 64 → 3, ~5,3k params) mais um slow path IVF (NN aproximado) sobre
+um subconjunto curado de ~212k refs chamado **Box-B**. Score de produção atual: **6000/6000**,
+p99 ≈ 0.16 ms.
 
 ## Arquitetura em alto nível
 
 O repo é composto de **duas metades fortemente acopladas**:
 
 1. **Pipeline offline (Python, GPU via PyTorch ROCm)** — produz três artefatos que o backend lê na
-   subida: `data/router_weights.bin` (MLP de 6.5 KB), `data/box_b_*.bin` (refs ordenados por
-   cluster + labels + centroides IVF + offsets CSR). Todo o trabalho pesado acontece aqui, uma
-   única vez.
+   subida: `data/router_weights.bin` (MLP de 20.8 KB / 5315 f32), `data/box_b_*.bin` (refs
+   ordenados por cluster + labels + centroides IVF + offsets CSR). Todo o trabalho pesado acontece
+   aqui, uma única vez.
 
 2. **Backend HTTP online (Rust, `backend/`)** — hyper 1.x direto (sem axum, sem crate de JSON),
    tokio em `current_thread`, parser byte-a-byte manual, kernel de distância AVX2+FMA, arquivos de
@@ -36,7 +36,7 @@ O repo é composto de **duas metades fortemente acopladas**:
 ```
 POST /fraud-score
   → vectorize::vectorize       (byte scan → [f32; 16], com round4 igual ao data-generator)
-  → router::infer              (MLP de 1635 params → P(A-Legit), P(A-Fraud), P(B))
+  → router::infer              (MLP de 5315 params → P(A-Legit), P(A-Fraud), P(B))
   → se P(B) > 0.5: slow_path::ivf_k5  (IVF sobre Box-B → fraud count 0..5)
     senão:         argmax(P(A-Legit) vs P(A-Fraud)) → count 0 ou 5
   → responde com um dos 6 corpos JSON pré-renderizados como &'static [u8]
@@ -46,47 +46,52 @@ POST /fraud-score
 
 ```
 prepare.py        descompacta references.json.gz → data/references.npy + labels.npy
-label.py          leave-one-out k-NN na GPU. RODAR DUAS VEZES: K=5 (sanidade) e
-                  K=25 (usado pela partição). Saída: data/fraud_counts_k{K}.npy.
-partition.py      labels + fraud_counts_k25 → data/box_labels.npy
-                  (3 classes: 0=A-Legit, 1=A-Fraud, 2=B)
+label.py          leave-one-out k-NN na GPU (K=25, usado pela partição). Saída:
+                  data/fraud_counts_k25.npy. (O run com K=5 é só sanidade — não
+                  faz parte do pipeline de produção orquestrado pelo Makefile.)
+partition.py      labels + fraud_counts_k25 → data/box_labels.before_halo.npy
+                  (3 classes: 0=A-Legit, 1=A-Fraud, 2=B). Pristine; nunca é
+                  sobrescrito pelo halo.
 nearest_opp.py    GPU: distância até o ref mais próximo de label oposto →
                   data/nearest_opp_dist.npy
 border_halo.py    promove refs A próximos da fronteira de classe para Box-B
-                  (D=0.23 default). Lê box_labels.before_halo.npy se existir; a
-                  primeira execução cria esse snapshot. Idempotente: pode rodar
-                  de novo com outro D sem promover duas vezes.
-export_box_b.py   k-means (NLIST=256) sobre Box-B → refs/labels/centroides
-                  padded + offsets CSR, ordenados por cluster.
+                  (D=0.23 default). Lê box_labels.before_halo.npy + nearest_opp,
+                  escreve data/box_labels.npy limpo (sem mutação in-place;
+                  rodar de novo com outro D nunca dobra-promove).
+export_box_b.py   k-means (NLIST=512 em produção) sobre Box-B → refs/labels/
+                  centroides padded + offsets CSR, ordenados por cluster. Tanto
+                  os arquivos f32 quanto os mirrors .i16.bin (scale=10000).
 train_router.py   MLP de 3 classes com cross-entropy balanceada por classe,
                   GELU(approximate="tanh"), early stopping (PATIENCE=30,
-                  MIN_DELTA=1e-5) → data/router.pt
-export_router.py  serializa os 1635 pesos f32 → data/router_weights.bin
+                  MIN_DELTA=1e-5). Lê box_labels.before_halo.npy (pristine,
+                  sem halo) — o router só precisa distinguir clusters
+                  homogêneos de tudo mais; o halo é só pro slow path.
+                  Save state por menor misroute B→A no 3M (não val_loss).
+                  → data/router.pt
+export_router.py  serializa os 5315 pesos f32 → data/router_weights.bin
 ```
 
-`run.py` / `run.sh` orquestram `prepare → label → train → evaluate` (pipeline antigo do estudo de
-viabilidade); o caminho de produção usa a sequência completa acima. **Não há orquestrador
-end-to-end que cubra partition → nearest_opp → border_halo → export** — esses passos são rodados
-manualmente, na ordem descrita.
+`make artifacts` orquestra o pipeline completo de produção (8 passos acima)
+com hiperparâmetros congelados (K=25, D=0.23, NLIST=512, SEED=42, HIDDEN=64,
+DEPTH=2, ITER=1000) e deps por arquivo — só re-roda o que ficou stale.
+`make artifacts-clean` apaga `data/*` com confirmação. `run.py` / `run.sh`
+são do pipeline ANTIGO de viabilidade (prepare → label → train → evaluate)
+e ficam só por compatibilidade — NÃO usar pra reproduzir a imagem oficial.
 
 ## Comandos comuns
 
 ### Offline (Python, gerenciado pelo uv)
 
 ```bash
-# Setup inicial: instala uv, cria .venv, sincroniza torch+ROCm
-./run.sh                                # roda prepare→label→train→evaluate completo
-SUBSET=100000 BATCH=128 ./run.sh        # smoke test em CPU / GPU pequena
+# Pipeline completo de produção (reproduz os 5 arquivos da imagem oficial):
+make artifacts                          # ~1h: prepare → label → ... → export_router
 
-# Steps individuais (depois que as deps já estão sincronizadas):
-uv run python prepare.py
-K=25 uv run python label.py             # K controla a largura da vizinhança
-uv run python partition.py
-uv run python nearest_opp.py
-D=0.23 uv run python border_halo.py     # re-tuning do threshold do halo
-NLIST=512 uv run python export_box_b.py    # também escreve mirrors .i16.bin
-uv run python train_router.py
-uv run python export_router.py
+# Re-rodar incrementalmente: Make sabe só o que ficou stale. Ex.: mexer em
+# train_router.py re-roda só train + export_router (segundos).
+
+# Steps individuais (override de env funciona normal):
+NLIST=1024 NPROBE=32 uv run python sweep_ivf.py  # estudo separado, fora do make
+uv run python find_mismatches.py        # roda contra o backend pra validar 6000/6000
 ```
 
 A GPU usa ROCm 7.2 por padrão (RDNA4). Troque a URL do index em `pyproject.toml` para CUDA/CPU; os
@@ -151,6 +156,11 @@ RATE=30000 DURATION=15s k6 run test/profile.js
 # Microbench só do kernel IVF (sem HTTP, sem router), lê os arquivos de índice via mmap
 cd ivf_bench && cargo run --release
 
+# Microbench só do kernel do router (sem HTTP, sem IVF). Reusa stress_queries.bin
+# se existir, senão gera queries random reproduzíveis com SEED. BATCH amortiza
+# overhead do Instant::now (~25 ns) — use BATCH=1000 pra ler latência pura.
+cd router_bench && cargo run --release   # default: 100k queries, BATCH=1
+
 # Sweep (NLIST × NPROBE) sobre o grid do IVF
 ./run_sweep.sh                           # ≈ 6 NLIST × 7 NPROBE combinações
 
@@ -177,9 +187,10 @@ Esses pontos são sutis e já causaram regressões — não mude um lado sem mud
   `backend/src/router.rs`) tem que casar com a fórmula do treino bit a bit. Se você re-treinar com
   outra ativação, atualize também o kernel Rust.
 
-- **A shape do router está congelada em hidden=32, depth=2** em `export_router.py` (assert) e em
-  `backend/src/router.rs` (constantes `H=32`, `D_IN=14`, `D_OUT=3` em compile time). Mudar a shape
-  do MLP exige atualizar os dois lados.
+- **A shape do router está congelada em hidden=64, depth=2** em `export_router.py` (assert) e em
+  `backend/src/router.rs` (constantes `H=64`, `D_IN=14`, `D_OUT=3` em compile time). O bench
+  isolado `router_bench/src/main.rs` duplica essas mesmas constantes (kernel proposital duplicado,
+  igual ao `ivf_bench` vs `slow_path`). Mudar a shape do MLP exige atualizar os três lados.
 
 - **Refs e centroides são padded para 16 valores por linha** (32 bytes em int16 = meia cache line;
   duas refs por linha). O kernel AVX2 carrega cada ref com um `_mm256_loadu_si256` e calcula a
@@ -213,6 +224,10 @@ Esses pontos são sutis e já causaram regressões — não mude um lado sem mud
 - **Duas cópias de `slow_path.rs`**: uma em `backend/src/` (produção) e outra inline em
   `ivf_bench/src/main.rs` (bench). É proposital — o crate do bench fica independente do crate do
   backend. Se você mexer no kernel, mexa nos dois — o `ivf_bench` não importa de `backend`.
+
+- **Duas cópias de `router.rs`**: mesma justificativa. `backend/src/router.rs` (produção) e
+  `router_bench/src/main.rs` (bench) têm kernels idênticos (Padé tanh, GELU, infer, softmax) e
+  constantes `H`/`D_IN`/`D_OUT` duplicadas em compile time. Mudou um, mude o outro.
 
 - **`run.py` / `run.sh` só cobrem o pipeline antigo de viabilidade** (prepare → label → train →
   evaluate). O pipeline de produção bifurca em `label.py` (com K=25) para partition → nearest_opp →

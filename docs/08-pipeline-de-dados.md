@@ -196,18 +196,18 @@ numpy já é suficiente. Detalhes do layout em [05 — Slow path IVF](./05-slow-
 
 ## train_router.py
 
-**Função**: treina o MLP de 3 classes (14 → 32 → 32 → 3).
+**Função**: treina o MLP de 3 classes (14 → 64 → 64 → 3).
 
 ```bash
 uv run python train_router.py
-EPOCHS=100 HIDDEN=32 DEPTH=2 uv run python train_router.py
+EPOCHS=100 HIDDEN=64 DEPTH=2 uv run python train_router.py
 ```
 
 Env vars:
 
 | Var         | Default | Significado                                         |
 |-------------|---------|-----------------------------------------------------|
-| `HIDDEN`    | 32      | Largura das camadas escondidas (***NÃO MUDE — o export e o Rust assumem 32***) |
+| `HIDDEN`    | 64      | Largura das camadas escondidas (***NÃO MUDE — o export e o Rust assumem 64***) |
 | `DEPTH`     | 2       | Número de camadas escondidas (***NÃO MUDE — idem***) |
 | `LR`        | 1e-3    | Adam learning rate                                  |
 | `EPOCHS`    | 500     | Cap de epochs (early stopping geralmente para muito antes) |
@@ -219,7 +219,8 @@ Env vars:
 Inputs:
 
 - `data/references.npy`
-- `data/box_labels.npy`
+- `data/box_labels.before_halo.npy` (pristine — sem halo; o router só precisa distinguir clusters
+  homogêneos de tudo mais. O halo é só pro slow path; a regra do Makefile garante esse desacoplamento.)
 
 Outputs:
 
@@ -227,17 +228,19 @@ Outputs:
 - `data/router_train_indices.npy` / `router_val_indices.npy` / `router_test_indices.npy` —
   split fixo (80/10/10, seed 42)
 
-Tempo: ~1-2 min em GPU (~30s por epoch × ~40 epochs até early stop). Em CPU multiplica por ~10.
+Tempo: ~1-2 min em GPU (~0.3s por epoch × ~60 epochs até patience). Em CPU multiplica por ~10.
 
-Métricas durante o treino:
+Métricas durante o treino (CM completa sobre os 3M — chunked em 100k pra contornar um bug
+do ROCm onde forward em batch de 3M devolve logits corrompidos):
 
 ```
-ep  39/500  train_loss=0.0014  val_loss=0.0013  acc=99.98%
-            recall=[A-L=99.99% A-F=99.99% B=99.93%]  elapsed=42s *
+ep  62/500  train_loss=0.0013  val_loss=0.0018  acc_3M=99.94%
+            recall=[A-L=100.00% A-F=99.82% B=99.98%]  misroute_3M=24/105504  elapsed=19s *
 ```
 
-O `*` no final marca o melhor val_loss até aquele epoch — o state salvo no `.pt` é o do `*` mais
-recente, não o último epoch. Mais detalhes em [04 — Router MLP](./04-router-mlp.md).
+O `*` no final marca a epoch com **menor misroute_3M** (não menor val_loss). O state salvo
+no `.pt` é o do `*` mais recente — empate em misroute prefere a epoch mais nova, que tende a ter
+pesos mais assentados pelo otimizador. Mais detalhes em [04 — Router MLP](./04-router-mlp.md).
 
 ## export_router.py
 
@@ -247,21 +250,21 @@ recente, não o último epoch. Mais detalhes em [04 — Router MLP](./04-router-
 uv run python export_router.py
 ```
 
-Sem env vars relevantes. Asserta que `hidden=32` e `depth=2` (o Rust assume essa shape).
+Sem env vars relevantes. Asserta que `hidden=64` e `depth=2` (o Rust assume essa shape).
 
-Output: `data/router_weights.bin` — **1635 floats × 4 bytes = 6540 bytes**.
+Output: `data/router_weights.bin` — **5315 floats × 4 bytes = 21260 bytes**.
 
 Ordem do flat array (importante!):
 
 ```
-w1 (32, 14)   — 448 floats   (row-major: out × in)
-b1 (32,)      —  32 floats
-w2 (32, 32)   — 1024 floats
-b2 (32,)      —  32 floats
-w3 (3, 32)    —  96 floats
-b3 (3,)       —   3 floats
+w1 (64, 14)   —  896 floats   (row-major: out × in)
+b1 (64,)      —   64 floats
+w2 (64, 64)   — 4096 floats
+b2 (64,)      —   64 floats
+w3 (3, 64)    —  192 floats
+b3 (3,)       —    3 floats
               ────
-              1635 floats total
+              5315 floats total
 ```
 
 O Rust loader em `backend/src/router.rs::load_weights` lê nessa exata ordem. Qualquer mudança de
@@ -344,8 +347,8 @@ data/
 ├── box_b_labels.bin               213 KB       ← lido pelo backend
 ├── box_b_ivf_centroids.bin         16 KB       ← lido pelo backend
 ├── box_b_ivf_offsets.bin            1 KB       ← lido pelo backend
-├── router.pt                        ~10 KB
-├── router_weights.bin              6.5 KB      ← lido pelo backend
+├── router.pt                        ~24 KB
+├── router_weights.bin              20.8 KB     ← lido pelo backend
 ├── router_train_indices.npy
 ├── router_val_indices.npy
 └── router_test_indices.npy

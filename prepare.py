@@ -13,6 +13,8 @@ Notes:
   not know they are special; geometric distance handles them naturally
   because "no previous tx" vectors cluster together at (-1, -1) in those dims.
 """
+import pipeline_log
+
 import gzip
 import json
 import os
@@ -68,4 +70,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pipeline_log.setup(__file__)
     main()

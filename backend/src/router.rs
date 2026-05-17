@@ -1,4 +1,4 @@
-//! Tiny MLP router: 14 → 32 → 32 → 3 with tanh-approx GELU.
+//! Tiny MLP router: 14 → 64 → 64 → 3 with tanh-approx GELU.
 //! Matches PyTorch's nn.GELU(approximate="tanh") used during training.
 //!
 //! The `tanh()` inside is computed via an inlined Padé[7/6] rational
@@ -8,10 +8,10 @@
 //! the boundary case is rare and the error never crosses the verdict.
 
 const D_IN: usize = 14;
-const H: usize = 32;
+const H: usize = 64;
 const D_OUT: usize = 3;
 
-pub const N_FLOATS: usize = D_IN * H + H + H * H + H + H * D_OUT + D_OUT; // 1635
+pub const N_FLOATS: usize = D_IN * H + H + H * H + H + H * D_OUT + D_OUT; // 5315
 
 pub struct Weights {
     w1: [[f32; D_IN]; H],

@@ -299,7 +299,7 @@ buffer flushes ou alocações raras) somem completamente. Score holds em 5700/60
 
 ```rust
 struct AppState {
-    weights: router::Weights,    // 6.5 KB, &'static após load
+    weights: router::Weights,    // 20,8 KB, &'static após load
     refs: &'static [f32],         // 13.6 MB, mmap'd
     labels: &'static [u8],        // 213 KB, mmap'd
     centroids: &'static [f32],    // 16 KB, mmap'd

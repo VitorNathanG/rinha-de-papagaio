@@ -125,7 +125,7 @@ Profile:  10 k RPS / 30 s — handle::closure 8.5 %, tokio runtime ~7.5 %,
 ## Out of scope here — score moves (not latency)
 
 ### 11. Exact kNN over the full 3M references
-- Replaces the 14→32→32→3 router + 105 k Box-B brute slow path with an
+- Replaces the 14→64→64→3 router + ~212 k Box-B IVF slow path with an
   IVF (or HNSW) index over the *full* 3M reference set. Eliminates the
   distillation noise floor (3 fp + 2 fn out of 54 060 at 5 700/6000) and
   pushes the score to 6000.

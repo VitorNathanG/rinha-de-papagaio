@@ -80,7 +80,7 @@ em [03 — Partição e halo](./03-particao-e-halo.md).
    vectorize::vectorize  (round4, [f32; 16])
         │
         ▼
-   router::infer          (MLP 14→32→32→3, ~1635 params)
+   router::infer          (MLP 14→64→64→3, ~5315 params)
         │
         ├── P(B) > 0.5 ──> slow_path::ivf_k5  (IVF sobre Box-B, ~212k refs)
         │
@@ -92,7 +92,7 @@ em [03 — Partição e halo](./03-particao-e-halo.md).
 
 Detalhamento dos componentes:
 
-- **Router** (1635 params, 6.5 KB) → [04 — Router MLP](./04-router-mlp.md)
+- **Router** (5315 params, 20,8 KB) → [04 — Router MLP](./04-router-mlp.md)
 - **Slow path** (IVF sobre Box-B) → [05 — Slow path IVF](./05-slow-path-ivf.md)
 - **Backend** (Rust, hyper direto, byte parser) → [06 — Backend Rust](./06-backend-rust.md)
 - **Guardrails numéricos** (round4, GELU coupling) → [07 — Guardrails numéricos](./07-guardrails-numericos.md)
@@ -105,7 +105,7 @@ Contra o `test/test.js` oficial da rinha (54.100 queries, ramp 2 min até 900 RP
 score:                 6000 / 6000
 score_p99:             3000  (saturado; p99 < 1 ms)
 score_det:             3000
-p99:                   0.15 ms
+p99:                   0.16 ms
 TP / TN / FP / FN:     24037 / 30023 / 0 / 0
 HTTP errors:           0
 ```
@@ -117,7 +117,7 @@ Working set total na memória:
 | Box-B refs (padded 16f)     | 13.6 MB  |
 | Box-B labels                | 213 KB   |
 | Centroides IVF + offsets    | 17 KB    |
-| Router weights              | 6.5 KB   |
+| Router weights              | 20,8 KB  |
 | Rust binary (release)       | ~5 MB    |
 | **Total container memory**  | ~270 MB  |
 

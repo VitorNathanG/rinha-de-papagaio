@@ -2,17 +2,20 @@
 Export the trained Router weights to raw f32 binary for the Rust backend.
 
 Layout (all f32, little-endian, no header):
-    w1: (32, 14)   = 448 floats  (row-major: out × in)
-    b1: (32,)      = 32 floats
-    w2: (32, 32)   = 1024 floats
-    b2: (32,)      = 32 floats
-    w3: (3, 32)    = 96 floats
+    w1: (64, 14)   = 896 floats  (row-major: out × in)
+    b1: (64,)      = 64 floats
+    w2: (64, 64)   = 4096 floats
+    b2: (64,)      = 64 floats
+    w3: (3, 64)    = 192 floats
     b3: (3,)       = 3 floats
-Total: 1635 floats = 6540 bytes.
+Total: 5315 floats = 21260 bytes.
 
-The Rust router loader assumes hidden=32 depth=2 (i.e., 3 Linear layers).
-If you retrain with different sizes you must update both sides.
+The Rust router loader assumes hidden=64 depth=2 (i.e., 3 Linear layers).
+If you retrain with different sizes you must update both sides — see the
+H/D_IN/D_OUT constants in backend/src/router.rs and router_bench/src/main.rs.
 """
+import pipeline_log
+
 import numpy as np
 import torch
 from pathlib import Path
@@ -27,9 +30,9 @@ def main():
     ckpt = torch.load(DATA / "router.pt", weights_only=True)
     hidden = ckpt["hidden"]
     depth = ckpt["depth"]
-    if hidden != 32 or depth != 2:
+    if hidden != 64 or depth != 2:
         raise SystemExit(
-            f"Rust backend assumes hidden=32 depth=2, found hidden={hidden} depth={depth}"
+            f"Rust backend assumes hidden=64 depth=2, found hidden={hidden} depth={depth}"
         )
 
     model = Router(hidden=hidden, depth=depth)
@@ -47,7 +50,7 @@ def main():
     flat.tofile(out_path)
 
     n_params = sum(p.numel() for p in model.parameters())
-    expected = 1635
+    expected = 5315
     print(f"[export] wrote {out_path}")
     print(f"[export] floats: {flat.size:,}  bytes: {flat.nbytes:,}")
     print(f"[export] model params: {n_params:,}  expected: {expected:,}")
@@ -56,4 +59,5 @@ def main():
 
 
 if __name__ == "__main__":
+    pipeline_log.setup(__file__)
     main()

@@ -11,8 +11,14 @@ Classes:
                  — label outliers (label != neighborhood consensus)
 
 Inputs:  data/labels.npy, data/fraud_counts_k25.npy
-Output:  data/box_labels.npy   shape (N,) uint8, values 0/1/2
+Output:  data/box_labels.before_halo.npy   shape (N,) uint8, values 0/1/2
+
+The output is the *pristine* partition before any halo expansion. The
+downstream border_halo.py reads this snapshot and produces the final
+data/box_labels.npy used by export_box_b.py and train_router.py.
 """
+import pipeline_log
+
 import os
 from pathlib import Path
 
@@ -28,7 +34,7 @@ K = 25  # the neighborhood width used to define the boxes
 
 
 def main():
-    out_path = DATA_DIR / "box_labels.npy"
+    out_path = DATA_DIR / "box_labels.before_halo.npy"
     if out_path.exists() and not os.environ.get("FORCE"):
         existing = np.load(out_path)
         print(f"[partition] already computed: {out_path} (shape={existing.shape})")
@@ -63,4 +69,5 @@ def _report(box: np.ndarray):
 
 
 if __name__ == "__main__":
+    pipeline_log.setup(__file__)
     main()

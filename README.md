@@ -5,7 +5,7 @@ detecção de fraude por 5-NN sobre 3M vetores de referência, budget de **1 CPU
 **p99 ≤ 1 ms**.
 
 Em vez de carregar um índice ANN sobre os 3M refs em runtime, este projeto **destila** o
-classificador 5-NN num MLP minúsculo (14 → 32 → 32 → 3, 1.635 params, 6.5 KB) que roteia ~3-7%
+classificador 5-NN num MLP pequeno (14 → 64 → 64 → 3, 5.315 params, 20,8 KB) que roteia ~3-7%
 das queries para um slow path IVF sobre um subset curado (Box-B, ~213k refs). O resto é resolvido
 direto pelo argmax do router.
 
@@ -23,21 +23,15 @@ Pré-requisitos: `uv`, GPU (ROCm 7.2 ou CUDA — ajustar `pyproject.toml`), Dock
 e o harness oficial são esperados em `../rinha-de-backend-2026/` (repo irmão).
 
 ```bash
-# 1. Pipeline offline (gera data/router_weights.bin + data/box_b_*.bin)
-uv run python prepare.py
-K=25 uv run python label.py
-uv run python partition.py
-uv run python nearest_opp.py
-D=0.23 uv run python border_halo.py
-uv run python export_box_b.py
-uv run python train_router.py
-uv run python export_router.py
+# 1. Pipeline offline (gera os 5 arquivos da imagem oficial em data/).
+#    Hiperparâmetros de produção (K=25, D=0.23, NLIST=512, SEED=42) já pinados.
+make artifacts                                  # ~1h end-to-end na primeira vez
 
 # 2. Stack de produção
-docker compose up --build
+make up                                         # build + lb + 2 réplicas + ready check
 
 # 3. Test oficial
-k6 run /projects/rinha-de-backend-2026/test/test.js
+make test                                       # k6 oficial (test.js, 2min ramp até 900 RPS)
 ```
 
 Detalhes operacionais completos em [docs/08 — Pipeline de dados](./docs/08-pipeline-de-dados.md).
@@ -84,7 +78,7 @@ sequência conta uma história coerente.
 - **[07 — Guardrails numéricos](./docs/07-guardrails-numericos.md)**: quatro pontos onde a
   numérica do treino tem que casar exatamente com a do runtime. **round4** no vectorize (match
   com o data generator), **GELU(tanh) coupling** entre train e infer, **Padé[7/6] tanh inline**
-  vs `libm::tanhf`, shape do router congelada em hidden=32 / depth=2 em ambos os lados. Cada um
+  vs `libm::tanhf`, shape do router congelada em hidden=64 / depth=2 em ambos os lados. Cada um
   foi descoberto por um bug que custou pontos.
 
 ### Operação

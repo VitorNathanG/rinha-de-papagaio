@@ -1,6 +1,6 @@
 # 04 — Router MLP
 
-O router é um MLP minúsculo (14 → 32 → 32 → 3, **1.635 parâmetros**, 6.5 KB) que prediz
+O router é um MLP pequeno (14 → 64 → 64 → 3, **5.315 parâmetros**, 20,8 KB) que prediz
 diretamente a classe do box (A-Legit / A-Fraud / B) de um query vector. Ele substitui o que
 seriam dois modelos separados (um "router binário" + um "classificador interno") por um único
 classificador de 3 classes.
@@ -36,22 +36,24 @@ P(A-Legit), P(A-Fraud), P(B)  ← softmax
 
 ```python
 nn.Sequential(
-    nn.Linear(14, 32),
+    nn.Linear(14, 64),
     nn.GELU(approximate="tanh"),
-    nn.Linear(32, 32),
+    nn.Linear(64, 64),
     nn.GELU(approximate="tanh"),
-    nn.Linear(32, 3),
+    nn.Linear(64, 3),
 )
 ```
 
 - **Entrada**: 14 dims (o query vetorizado, mesmo formato dos refs).
-- **Escondidas**: 32 unidades × 2 camadas. Por que 32? Suficiente para hit recall_B ≈ 99.93% sem
-  inflar params além do necessário. Trade-off testado empiricamente.
+- **Escondidas**: 64 unidades × 2 camadas. Por que 64? Com pristine box labels (sem halo), a
+  fronteira é muito mais limpa e 32 unidades já chegavam a recall_B ≈ 99.93% — mas a evidência
+  empírica do treino atual mostra que dobrar pra 64 reduz o floor de misroutes B→A no 3M de ~31
+  pra ~24 (5,3× mais params, ainda <1% do p99 do backend). Trade-off favorável.
 - **Saída**: 3 classes via softmax.
 - **Ativação**: GELU com `approximate="tanh"` (a fórmula GPT-2/OpenAI). Detalhes da escolha em
   [07 — Guardrails numéricos](./07-guardrails-numericos.md).
 
-Tamanho final em bytes: `1635 × 4 = 6.540`. Cabe em uma única página de memória.
+Tamanho final em bytes: `5315 × 4 = 21.260`. Cabe folgado em poucas páginas de memória.
 
 ## Treino
 
@@ -91,26 +93,26 @@ learning rate scale ficar coerente.
 `PATIENCE=30`, `MIN_DELTA=1e-5`. O modelo treina até `EPOCHS=500` (default alto) mas para cedo
 quando o val_loss não melhora por 30 epochs seguidas. Tipicamente converge em ep 30-70.
 
-O estado salvo é o do **melhor val_loss**, não o último — o método clona `state_dict()` toda vez
-que `val_loss` cai mais que `MIN_DELTA`.
+O estado salvo é o do **menor misroute_3M** (não menor val_loss). Empiricamente os dois divergem
+— a epoch com menor val_loss costuma ter ~3-4× mais misroutes que a epoch de melhor recall em B.
+Como o objetivo do router é justamente zerar misroute, salvamos por ele. `val_loss` continua
+dirigindo a patience (sinal mais estável que o número de misroutes, que oscila ±30 por causa de
+não-determinismo do argmax em samples borderline).
 
 ### Métricas durante o treino
 
-Por epoch, o script logga:
+CM completa sobre os 3M (train + val + test) por epoch — chunked em 100k pra contornar um bug
+do ROCm onde forward em batch de 3M devolve logits corrompidos:
 
 ```
-ep  39/500  train_loss=0.0014  val_loss=0.0013  acc=99.98%
-            recall=[A-L=99.99% A-F=99.99% B=99.93%]  elapsed=42s *
+ep  62/500  train_loss=0.0013  val_loss=0.0018  acc_3M=99.94%
+            recall=[A-L=100.00% A-F=99.82% B=99.98%]  misroute_3M=24/105504  elapsed=19s *
 ```
 
-`recall_B` é o número que mais importa para o score, porque um miss-route B → A é um verdict
-flip provável (o argmax de A-Legit/A-Fraud não tem por que estar correto para um query que
-deveria ir pro slow path).
-
-Tipicamente alcançamos `recall_B ≈ 99.93%` — isto é, ~7 a cada 10k queries de B são roteadas
-erradamente para A. O efeito no score é mitigado pelo fato de que **a maioria dessas misroutes
-cai no argmax certo por acidente** (refs de B perto da fronteira de cluster legit tendem a ter
-prior legit, etc.).
+`misroute_3M` é o número safety-critical: ref com true=B classificado pelo router como A bypassa
+o slow path em prod. Tipicamente alcançamos ~20-30 misroutes (≈ 0,02% dos 105k true-B); o efeito
+no score é nulo porque **na prática esses misroutes geram o mesmo verdict que o slow path
+geraria** (validamos 96/96 contra brute k=5 sobre Box-B post-halo).
 
 ## Inferência runtime
 
@@ -155,18 +157,18 @@ sweet-spot empírico — manda ~3.5-7% das queries para slow path.
 
 ## Exportação dos pesos para Rust
 
-`export_router.py` lê `data/router.pt` e escreve `data/router_weights.bin` como **1635 f32
+`export_router.py` lê `data/router.pt` e escreve `data/router_weights.bin` como **5315 f32
 little-endian, sem header**, na ordem:
 
 ```
-w1 (32, 14)   = 448 floats
-b1 (32,)      =  32
-w2 (32, 32)   = 1024
-b2 (32,)      =  32
-w3 (3, 32)    =  96
-b3 (3,)       =   3
+w1 (64, 14)   =  896 floats
+b1 (64,)      =   64
+w2 (64, 64)   = 4096
+b2 (64,)      =   64
+w3 (3, 64)    =  192
+b3 (3,)       =    3
                 ----
-                1635
+                5315
 ```
 
 A ordem é `out × in` (a convenção `nn.Linear.weight` do PyTorch). O loader em
