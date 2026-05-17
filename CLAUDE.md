@@ -111,6 +111,31 @@ Env vars principais consumidas pelo backend: `BIND_ADDR` (`host:port` ou `/camin
 `TOKIO_WORKERS` (default 1 = current_thread), `NPROBE` (default 16), `REFS_PATH`, `LABELS_PATH`,
 `CENTROIDS_PATH`, `OFFSETS_PATH`, `WEIGHTS_PATH`.
 
+### Submissão à rinha (Makefile)
+
+A submissão usa uma imagem monolítica `vitornathan/rinha-de-papagaio:latest` no Docker Hub
+(binário + 5 artefatos i16 do índice embutidos, ~31 MB). A branch órfã `submission` contém só
+`docker-compose.yml` (com o `nginx.conf` inline via `configs.content`) e `info.json`. O engine
+da rinha clona o repo, faz `git checkout submission` e `docker compose up`. O mapeamento
+`participants/VitorNathanG.json → repo + id` vive no upstream `zanfranceschi/rinha-de-backend-2026`
+(já mergeado; `id=papagaio`).
+
+Targets relevantes:
+
+```bash
+make build       # build local da imagem papagaio-api:latest
+make up          # sobe o stack (lb + 2 réplicas) com healthcheck no /ready
+make test        # roda o k6 oficial (test.js, 2 min ramp até 900 RPS)
+make deploy      # build + tag + push pro REGISTRY_IMAGE no Docker Hub
+make issue       # `gh issue create rinha/test $(SUBMISSION_ID)` no upstream
+```
+
+**`make deploy` e `make issue` são ações de blast-radius alto** — empurram artefato pro registry
+público e abrem uma issue visível atrelada ao usuário no repo de terceiros. **Nunca rode esses
+dois targets de forma proativa.** Espere o usuário pedir explicitamente ("deploy", "submete",
+"manda pra rinha", "abre a issue"). Mesmo após uma mudança aparentemente pronta, pare em `make
+test` ou `make build` e pergunte (ou só reporte que está pronto pra deploy).
+
 ### Testes / benches
 
 ```bash
