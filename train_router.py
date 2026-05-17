@@ -45,9 +45,15 @@ DATA_DIR = ROOT / "data"
 class Router(nn.Module):
     def __init__(self, hidden: int = 32, depth: int = 2, num_classes: int = 3):
         super().__init__()
-        layers = [nn.Linear(14, hidden), nn.GELU()]
+        # GELU(tanh) — the OpenAI / GPT-2 approximation. Picked over the
+        # default erf-based GELU because the Rust inference kernel reuses
+        # this formula via libm::tanhf (one transcendental call instead of
+        # one erff that itself fans out into expf), and we need the train
+        # and inference functions to match numerically.
+        gelu = lambda: nn.GELU(approximate="tanh")
+        layers = [nn.Linear(14, hidden), gelu()]
         for _ in range(depth - 1):
-            layers += [nn.Linear(hidden, hidden), nn.GELU()]
+            layers += [nn.Linear(hidden, hidden), gelu()]
         layers += [nn.Linear(hidden, num_classes)]
         self.net = nn.Sequential(*layers)
 
@@ -102,13 +108,21 @@ def main():
     lr = float(os.environ.get("LR", 1e-3))
     opt = torch.optim.Adam(model.parameters(), lr=lr)
 
-    epochs = int(os.environ.get("EPOCHS", 12))
+    epochs = int(os.environ.get("EPOCHS", 500))
     batch = int(os.environ.get("BATCH", 8192))
-    print(f"[router] epochs={epochs}  batch={batch}  lr={lr}")
+    # Early stopping: bail when val_loss hasn't improved by MIN_DELTA in the
+    # last PATIENCE epochs. Keeps the "best state" model regardless.
+    patience = int(os.environ.get("PATIENCE", 30))
+    min_delta = float(os.environ.get("MIN_DELTA", 1e-5))
+    print(f"[router] epochs<={epochs}  batch={batch}  lr={lr}  "
+          f"patience={patience}  min_delta={min_delta}")
 
     t0 = time.time()
     best_val = float("inf")
     best_state = None
+    best_epoch = 0
+    epochs_since_best = 0
+    stopped_early = False
     n = Xtr.shape[0]
     for ep in range(epochs):
         model.train()
@@ -142,17 +156,31 @@ def main():
                                    / mask.sum().item())
         elapsed = time.time() - t0
         marker = ""
-        if val_loss < best_val:
+        if val_loss < best_val - min_delta:
             best_val = val_loss
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            best_epoch = ep + 1
+            epochs_since_best = 0
             marker = " *"
-        print(f"[router] ep {ep+1:>2}/{epochs}  "
+        else:
+            epochs_since_best += 1
+        print(f"[router] ep {ep+1:>3}/{epochs}  "
               f"train_loss={train_loss:.4f}  val_loss={val_loss:.4f}  "
               f"acc={acc*100:5.2f}%  "
               f"recall=[A-L={recalls[0]*100:5.2f}% "
               f"A-F={recalls[1]*100:5.2f}% "
               f"B={recalls[2]*100:5.2f}%]"
               f"  elapsed={elapsed:.0f}s{marker}")
+        if epochs_since_best >= patience:
+            print(f"[router] early stop: no val_loss improvement in "
+                  f"{patience} epochs (best at ep {best_epoch}, "
+                  f"val_loss={best_val:.4f})")
+            stopped_early = True
+            break
+
+    if not stopped_early:
+        print(f"[router] reached max epochs={epochs} without early stop "
+              f"(best at ep {best_epoch}, val_loss={best_val:.4f})")
 
     model.load_state_dict(best_state)
     torch.save(

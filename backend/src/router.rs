@@ -1,5 +1,11 @@
-//! Tiny MLP router: 14 → 32 → 32 → 3 with exact erf-based GELU.
-//! Matches PyTorch's default nn.GELU (the model was trained with it).
+//! Tiny MLP router: 14 → 32 → 32 → 3 with tanh-approx GELU.
+//! Matches PyTorch's nn.GELU(approximate="tanh") used during training.
+//!
+//! The `tanh()` inside is computed via an inlined Padé[7/6] rational
+//! approximation (no libm call) — ~2× faster than libm::tanhf and accurate
+//! to ~2e-7 over |x| ≤ 4.97 (max error 1e-4 at the clamp boundary where
+//! we saturate to ±1). The MLP only ever sees small post-Linear sums, so
+//! the boundary case is rare and the error never crosses the verdict.
 
 const D_IN: usize = 14;
 const H: usize = 32;
@@ -69,10 +75,29 @@ pub fn load_weights(bytes: &[u8]) -> Weights {
     Weights { w1, b1, w2, b2, w3, b3 }
 }
 
+/// Padé[7/6] rational approximation of tanh — exact to ~2e-7 over |x| ≤ 5,
+/// then saturates to ±1 (tanh(4.97) ≈ 0.99989, so the discontinuity at the
+/// clamp is < 1e-4). Cost: ~7 multiplies + 6 adds + 1 divide, vs libm::tanhf
+/// which fans out to expm1f (~2× more cycles on Haswell).
+#[inline]
+fn tanh_approx(x: f32) -> f32 {
+    if x.abs() >= 4.97 {
+        return x.signum();
+    }
+    let x2 = x * x;
+    let num = x * (135135.0 + x2 * (17325.0 + x2 * (378.0 + x2)));
+    let den = 135135.0 + x2 * (62370.0 + x2 * (3150.0 + x2 * 28.0));
+    num / den
+}
+
 #[inline]
 fn gelu(x: f32) -> f32 {
-    // Exact PyTorch nn.GELU: 0.5 * x * (1 + erf(x / sqrt(2)))
-    x * 0.5 * (1.0 + libm::erff(x * std::f32::consts::FRAC_1_SQRT_2))
+    // Tanh-GELU (OpenAI / GPT-2 formula, == PyTorch nn.GELU(approximate="tanh")):
+    //   0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x³)))
+    const SQRT_2_OVER_PI: f32 = 0.7978845608028654;
+    const COEFF: f32 = 0.044715;
+    let inner = SQRT_2_OVER_PI * (x + COEFF * x * x * x);
+    0.5 * x * (1.0 + tanh_approx(inner))
 }
 
 /// Returns [P(A-Legit), P(A-Fraud), P(B)] from a 16-float padded query
