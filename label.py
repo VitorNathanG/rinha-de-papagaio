@@ -59,8 +59,11 @@ DATA_DIR = ROOT / "data"
 
 def main():
     K = int(os.environ.get("K", 5))
-    if not (1 <= K <= 255):
-        raise SystemExit(f"[label] K must be in [1, 255], got {K}")
+    if not (1 <= K <= 65535):
+        raise SystemExit(f"[label] K must be in [1, 65535], got {K}")
+    # uint8 only goes to 255; anything past that needs uint16 for the count.
+    count_dtype = torch.uint8 if K <= 255 else torch.int16
+    np_count_dtype = np.uint8 if K <= 255 else np.uint16
     threshold = math.ceil(0.6 * K)  # rinha-style "denied" cutoff (only meaningful at K=5)
 
     out_path = DATA_DIR / f"fraud_counts_k{K}.npy"
@@ -100,7 +103,7 @@ def main():
     print(f"[label] K={K}  N={N:,}  batch={batch}  chunk={chunk:,}  "
           f"subset={subset:,}  dtype={dtype_label}")
 
-    counts = torch.empty(subset, dtype=torch.uint8, device=device)
+    counts = torch.empty(subset, dtype=count_dtype, device=device)
     INF = float("inf")
     t0 = time.time()
     last_log = t0
@@ -139,7 +142,7 @@ def main():
             best_d, sel = torch.topk(cand_d, K, dim=1, largest=False)
             best_idx = torch.gather(cand_idx, 1, sel)
 
-        counts[start:end] = L[best_idx].sum(dim=1).to(torch.uint8)
+        counts[start:end] = L[best_idx].sum(dim=1).to(count_dtype)
 
         now = time.time()
         if now - last_log > 5.0 or end == subset:
