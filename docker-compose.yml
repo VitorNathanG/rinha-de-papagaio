@@ -1,6 +1,6 @@
 services:
   api1:
-    image: ghcr.io/vitornathang/papagaio-api:latest
+    image: vitornathan/rinha-de-papagaio:latest
     container_name: papagaio-api1
     volumes:
       - sockets:/var/run/papagaio
@@ -13,7 +13,7 @@ services:
           memory: "120MB"
 
   api2:
-    image: ghcr.io/vitornathang/papagaio-api:latest
+    image: vitornathan/rinha-de-papagaio:latest
     container_name: papagaio-api2
     depends_on:
       - api1
