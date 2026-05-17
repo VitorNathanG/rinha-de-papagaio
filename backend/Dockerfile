@@ -27,10 +27,12 @@ WORKDIR /app
 COPY --from=builder /build/target/release/papagaio-api /usr/local/bin/papagaio-api
 
 # Index + weights live at /app/data — matches the binary's default paths
-# (REFS_PATH=data/box_b_refs.bin, etc., resolved relative to WORKDIR).
-COPY data/box_b_refs.bin \
+# (REFS_PATH=data/box_b_refs.i16.bin, etc., resolved relative to WORKDIR).
+# Só os arquivos i16 entram na imagem; os mirrors f32 são pra brute-force
+# offline e ferramentas, não pro runtime.
+COPY data/box_b_refs.i16.bin \
      data/box_b_labels.bin \
-     data/box_b_ivf_centroids.bin \
+     data/box_b_ivf_centroids.i16.bin \
      data/box_b_ivf_offsets.bin \
      data/router_weights.bin \
      ./data/

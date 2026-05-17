@@ -12,12 +12,13 @@ backend/*
 !backend/.cargo
 !backend/src
 
-# Re-include only the 5 runtime artefacts baked into the image.
+# Re-include só os arquivos do runtime (kernel i16) — os mirrors f32 são
+# para ferramentas offline e ficam fora da imagem.
 !data
 data/*
-!data/box_b_refs.bin
+!data/box_b_refs.i16.bin
 !data/box_b_labels.bin
-!data/box_b_ivf_centroids.bin
+!data/box_b_ivf_centroids.i16.bin
 !data/box_b_ivf_offsets.bin
 !data/router_weights.bin
 
