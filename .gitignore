@@ -12,4 +12,11 @@ target/
 # k6 writes the rinha results.json here when run from this dir.
 test/results.json
 
+# Outputs of run_sweep.sh (per-combo bench table on stdout, status on stderr).
+sweep.out
+sweep.stderr
+
+# Local backup files left behind by editors / migrations (e.g. pyproject.toml.bak).
+*.bak
+
 # uv.lock IS committed — do not ignore it
