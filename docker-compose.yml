@@ -1,0 +1,83 @@
+services:
+  api1:
+    image: ghcr.io/vitornathang/papagaio-api:latest
+    container_name: papagaio-api1
+    volumes:
+      - sockets:/var/run/papagaio
+    environment:
+      BIND_ADDR: /var/run/papagaio/api1.sock
+    deploy:
+      resources:
+        limits:
+          cpus: "0.425"
+          memory: "120MB"
+
+  api2:
+    image: ghcr.io/vitornathang/papagaio-api:latest
+    container_name: papagaio-api2
+    depends_on:
+      - api1
+    volumes:
+      - sockets:/var/run/papagaio
+    environment:
+      BIND_ADDR: /var/run/papagaio/api2.sock
+    deploy:
+      resources:
+        limits:
+          cpus: "0.425"
+          memory: "120MB"
+
+  lb:
+    image: nginx:alpine
+    container_name: papagaio-lb
+    ports:
+      - "9999:9999"
+    volumes:
+      - sockets:/var/run/papagaio
+    configs:
+      - source: nginx_conf
+        target: /etc/nginx/nginx.conf
+    depends_on:
+      - api1
+      - api2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.15"
+          memory: "30MB"
+
+volumes:
+  sockets:
+
+# nginx.conf inlined: a branch submission só pode conter docker-compose.yml +
+# info.json. `configs.content` materializa o arquivo dentro do container, em
+# /etc/nginx/nginx.conf, sem precisar de bind-mount do host.
+configs:
+  nginx_conf:
+    content: |
+      worker_processes 1;
+      error_log /dev/stderr warn;
+
+      events {
+          worker_connections 4096;
+          use epoll;
+          multi_accept on;
+      }
+
+      # Pure TCP load balancing — sem parsing HTTP, sem buffering. Os bytes
+      # do cliente são spliced direto pro socket upstream e voltam. Trade-off:
+      # LB é por conexão (keep-alive HTTP fixa a conexão num upstream), o que
+      # é OK porque o k6 espalha por muitos VUs.
+      stream {
+          upstream papagaio_api {
+              server unix:/var/run/papagaio/api1.sock;
+              server unix:/var/run/papagaio/api2.sock;
+          }
+
+          server {
+              listen 9999 reuseport backlog=4096;
+              proxy_pass papagaio_api;
+              proxy_connect_timeout 1s;
+              proxy_timeout 30s;
+          }
+      }

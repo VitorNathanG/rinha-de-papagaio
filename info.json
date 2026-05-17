@@ -1,0 +1,14 @@
+{
+    "participants": ["Vitor Nathan Gonçalves"],
+    "social": [
+        "https://linkedin.com/in/vitor-nathan-goncalves/",
+        "https://github.com/VitorNathanG"
+    ],
+    "source-code-repo": "https://github.com/VitorNathanG/rinha-de-papagaio",
+    "stack": [
+        "python",
+        "pytorch",
+        "rust",
+        "nginx"
+    ]
+}
