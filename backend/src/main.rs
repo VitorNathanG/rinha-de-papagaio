@@ -24,7 +24,9 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
+use memmap2::Mmap;
 use std::convert::Infallible;
+use std::fs::File;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
@@ -47,8 +49,11 @@ const RESPONSES: [&[u8]; 6] = [
 
 struct AppState {
     weights: router::Weights,
-    refs: Vec<f32>,
-    labels: Vec<u8>,
+    refs: &'static [f32],
+    labels: &'static [u8],
+    centroids: &'static [f32],
+    offsets: &'static [u32],
+    nprobe: usize,
 }
 
 fn main() {
@@ -144,7 +149,16 @@ async fn handle(
             let count: u8 = if vectorize::vectorize(&body, &mut v).is_ok() {
                 let probs = router::infer(&state.weights, &v);
                 if probs[2] > 0.5 {
-                    unsafe { slow_path::brute_k5(&v, &state.refs, &state.labels) }
+                    unsafe {
+                        slow_path::ivf_k5(
+                            &v,
+                            state.centroids,
+                            state.offsets,
+                            state.refs,
+                            state.labels,
+                            state.nprobe,
+                        )
+                    }
                 } else if probs[0] > probs[1] {
                     0 // A-Legit
                 } else {
@@ -178,35 +192,87 @@ fn ready_response() -> Response<Full<Bytes>> {
     Response::new(Full::new(Bytes::from_static(b"OK")))
 }
 
+/// mmap a file and leak the mapping so we can hand out a `'static` slice. The
+/// mapping lives for the whole process anyway (AppState is held in an Arc for
+/// the lifetime of the runtime), so the leak is a one-time wash — no growth.
+fn mmap_static(path: &str) -> &'static [u8] {
+    let file = File::open(path).unwrap_or_else(|e| panic!("open {path}: {e}"));
+    let mmap = unsafe { Mmap::map(&file).unwrap_or_else(|e| panic!("mmap {path}: {e}")) };
+    // Hint the kernel to start populating page table entries — speeds up the
+    // first few queries that would otherwise eat synchronous page faults.
+    let _ = mmap.advise(memmap2::Advice::WillNeed);
+    let leaked: &'static Mmap = Box::leak(Box::new(mmap));
+    &leaked[..]
+}
+
+/// Force-fault every page so the first slow query doesn't pay the demand-paging
+/// cost. Sequential touch is faster than letting Advice::WillNeed do its async
+/// thing and racing the first request.
+fn touch_pages(bytes: &[u8]) {
+    let mut acc: u64 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        acc = acc.wrapping_add(bytes[i] as u64);
+        i += 4096;
+    }
+    std::hint::black_box(acc);
+}
+
 fn load_state() -> AppState {
-    let refs_path = std::env::var("REFS_PATH").unwrap_or_else(|_| "data/box_b_refs.bin".to_string());
+    let refs_path =
+        std::env::var("REFS_PATH").unwrap_or_else(|_| "data/box_b_refs.bin".to_string());
     let labels_path =
         std::env::var("LABELS_PATH").unwrap_or_else(|_| "data/box_b_labels.bin".to_string());
+    let centroids_path = std::env::var("CENTROIDS_PATH")
+        .unwrap_or_else(|_| "data/box_b_ivf_centroids.bin".to_string());
+    let offsets_path = std::env::var("OFFSETS_PATH")
+        .unwrap_or_else(|_| "data/box_b_ivf_offsets.bin".to_string());
     let weights_path =
         std::env::var("WEIGHTS_PATH").unwrap_or_else(|_| "data/router_weights.bin".to_string());
+    let nprobe: usize = std::env::var("NPROBE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(16);
 
-    eprintln!("[papagaio] loading {refs_path}");
-    let refs_bytes =
-        std::fs::read(&refs_path).unwrap_or_else(|e| panic!("read {refs_path}: {e}"));
-    let refs: Vec<f32> = bytemuck::cast_slice(&refs_bytes).to_vec();
+    let refs_bytes = mmap_static(&refs_path);
+    let labels_bytes = mmap_static(&labels_path);
+    let centroids_bytes = mmap_static(&centroids_path);
+    let offsets_bytes = mmap_static(&offsets_path);
 
-    eprintln!("[papagaio] loading {labels_path}");
-    let labels =
-        std::fs::read(&labels_path).unwrap_or_else(|e| panic!("read {labels_path}: {e}"));
+    touch_pages(refs_bytes);
+    touch_pages(labels_bytes);
+    touch_pages(centroids_bytes);
+    touch_pages(offsets_bytes);
 
-    eprintln!("[papagaio] loading {weights_path}");
-    let weights_bytes =
-        std::fs::read(&weights_path).unwrap_or_else(|e| panic!("read {weights_path}: {e}"));
+    let refs: &'static [f32] = bytemuck::cast_slice(refs_bytes);
+    let labels: &'static [u8] = labels_bytes;
+    let centroids: &'static [f32] = bytemuck::cast_slice(centroids_bytes);
+    let offsets: &'static [u32] = bytemuck::cast_slice(offsets_bytes);
+
+    let weights_bytes = std::fs::read(&weights_path)
+        .unwrap_or_else(|e| panic!("read {weights_path}: {e}"));
     let weights = router::load_weights(&weights_bytes);
 
+    let nlist = offsets.len() - 1;
     assert_eq!(refs.len(), labels.len() * 16, "refs/labels size mismatch");
+    assert_eq!(centroids.len(), nlist * 16, "centroids/offsets nlist mismatch");
+    assert!((1..=64).contains(&nprobe), "NPROBE must be in 1..=64");
 
     eprintln!(
-        "[papagaio] loaded {} Box-B refs ({:.2} MB) + {} weight floats",
+        "[papagaio] loaded {} refs ({:.2} MB) + nlist={} centroids ({:.1} KB), nprobe={}",
         labels.len(),
         refs_bytes.len() as f64 / 1e6,
-        weights_bytes.len() / 4,
+        nlist,
+        centroids_bytes.len() as f64 / 1e3,
+        nprobe,
     );
 
-    AppState { weights, refs, labels }
+    AppState {
+        weights,
+        refs,
+        labels,
+        centroids,
+        offsets,
+        nprobe,
+    }
 }

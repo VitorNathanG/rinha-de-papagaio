@@ -12,6 +12,7 @@ bytes = "1"
 bytemuck = "1.18"
 libm = "0.2"
 memchr = "2.7"
+memmap2 = "0.9"
 
 [profile.release]
 opt-level = 3
