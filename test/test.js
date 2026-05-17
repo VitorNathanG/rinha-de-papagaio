@@ -141,13 +141,15 @@ function buildCsv(series) {
 // SVG self-contained, sem dependências externas. Eixo Y esquerdo = latência
 // (ms), eixo Y direito = RPS (count). Eixo X = tempo decorrido em segundos.
 // Três séries: max latência (vermelho), p99 latência (azul), RPS (verde).
-// O painel `stats` (canto superior direito) traz os percentis globais do
-// http_req_duration e contagens de TP/FP/etc do scoring oficial.
+// O painel `stats` (lateral direita, fora da área de plot) traz os percentis
+// globais do http_req_duration e contagens de TP/FP/etc do scoring oficial.
 function buildSvg(series, stats) {
-    const W = 1400;
-    const H = 700;
     const M = { top: 50, right: 90, bottom: 60, left: 80 };
-    const innerW = W - M.left - M.right;
+    const chartInnerW = 1230;
+    const sidebarW = 280;          // stats panel + breathing room
+    const W = M.left + chartInnerW + M.right + sidebarW;  // 1680
+    const H = 700;
+    const innerW = chartInnerW;
     const innerH = H - M.top - M.bottom;
 
     if (series.length === 0) {
@@ -219,12 +221,12 @@ function buildSvg(series, stats) {
         <text x="${lx + 48}" y="${ly + 72}" fill="#333">requests/s</text>
       </g>`;
 
-    // Painel de stats globais — colocado no canto superior direito do plot,
-    // dentro da área de dados pra não competir com a margem do eixo direito.
-    const sw = 240;
-    const sh = 200;
-    const sx0 = M.left + innerW - sw - 12;
-    const sy0 = M.top + 12;
+    // Painel de stats globais — coluna à direita do gráfico, fora da área
+    // de plot. A largura do SVG já reservou `sidebarW` pra esse espaço.
+    const sw = 260;
+    const sh = 230;
+    const sx0 = M.left + innerW + M.right + 10;
+    const sy0 = M.top;
     const row = (i, label, value) =>
         `<text x="${sx0 + 12}" y="${sy0 + 36 + i * 18}" fill="#333">${label}</text>` +
         `<text x="${sx0 + sw - 12}" y="${sy0 + 36 + i * 18}" text-anchor="end" fill="#333" font-family="monospace">${value}</text>`;
@@ -249,7 +251,7 @@ function buildSvg(series, stats) {
     return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" font-family="sans-serif">
   <rect width="${W}" height="${H}" fill="white"/>
-  <text x="${(W / 2).toFixed(1)}" y="30" text-anchor="middle" font-size="18" font-weight="bold">Latência e throughput por segundo — rinha official load (ramp 0→900 RPS em 120s)</text>
+  <text x="${(M.left + innerW / 2).toFixed(1)}" y="30" text-anchor="middle" font-size="18" font-weight="bold">Latência e throughput por segundo — rinha official load (ramp 0→900 RPS em 120s)</text>
   <text x="${(M.left - 60).toFixed(1)}" y="${(M.top + innerH / 2).toFixed(1)}" text-anchor="middle" font-size="13" fill="#d62728" transform="rotate(-90 ${(M.left - 60).toFixed(1)} ${(M.top + innerH / 2).toFixed(1)})">latência (ms)</text>
   <text x="${(M.left + innerW + 60).toFixed(1)}" y="${(M.top + innerH / 2).toFixed(1)}" text-anchor="middle" font-size="13" fill="#2ca02c" transform="rotate(90 ${(M.left + innerW + 60).toFixed(1)} ${(M.top + innerH / 2).toFixed(1)})">requests/s</text>
   <text x="${(M.left + innerW / 2).toFixed(1)}" y="${(H - 15).toFixed(1)}" text-anchor="middle" font-size="13" fill="#333">tempo decorrido (s)</text>
