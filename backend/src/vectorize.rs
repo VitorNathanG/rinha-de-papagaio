@@ -89,6 +89,14 @@ pub fn vectorize(body: &[u8], out: &mut [f32; 16]) -> Result<(), ()> {
     out[11] = if known_contains(known, merchant_id) { 0.0 } else { 1.0 };
     out[12] = mcc_risk(mcc);
     out[13] = clamp01(merch_avg as f32 / MAX_MERCHANT_AVG_AMOUNT);
+
+    // Round to 4 decimal places — matches `round4` applied by the data
+    // generator (data-generator/main.c:774) before its kNN, and required so
+    // we tie-break the same way on the rare queries where rank-5 vs rank-6
+    // are within ~1e-5 of each other in raw float (e.g. test entry 5472).
+    for i in 0..14 {
+        out[i] = (out[i] * 10000.0).round() / 10000.0;
+    }
     out[14] = 0.0;
     out[15] = 0.0;
 
