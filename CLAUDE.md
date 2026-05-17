@@ -84,7 +84,7 @@ K=25 uv run python label.py             # K controla a largura da vizinhança
 uv run python partition.py
 uv run python nearest_opp.py
 D=0.23 uv run python border_halo.py     # re-tuning do threshold do halo
-NLIST=256 uv run python export_box_b.py
+NLIST=512 uv run python export_box_b.py    # também escreve mirrors .i16.bin
 uv run python train_router.py
 uv run python export_router.py
 ```
@@ -156,9 +156,28 @@ Esses pontos são sutis e já causaram regressões — não mude um lado sem mud
   `backend/src/router.rs` (constantes `H=32`, `D_IN=14`, `D_OUT=3` em compile time). Mudar a shape
   do MLP exige atualizar os dois lados.
 
-- **Refs e centroides são padded para 16 floats por linha** (uma cache line de 64 bytes) para que
-  o kernel AVX2 de distância carregue-os com dois `_mm256_loadu_ps`. Os exportadores Python
-  escrevem esse padding; o kernel Rust depende dele.
+- **Refs e centroides são padded para 16 valores por linha** (32 bytes em int16 = meia cache line;
+  duas refs por linha). O kernel AVX2 carrega cada ref com um `_mm256_loadu_si256` e calcula a
+  distância via `_mm256_sub_epi16` + `_mm256_madd_epi16` + `_mm256_cvtepi32_ps`. Os exportadores
+  Python escrevem o padding zerado; o kernel Rust depende dele.
+
+- **Os refs/centroides em produção são int16 com scale=10000** (`box_b_refs.i16.bin`,
+  `box_b_ivf_centroids.i16.bin`). Como `vectorize` aplica round4, todo input está no grid
+  `k/10000`, e a quantização é bit-exato nas refs. Centroides (médias do k-means) ganham ±0.5
+  unidade de ruído por dim, mas isso é sub-raio-do-cluster e não muda ranking nprobe. Os arquivos
+  f32 (`box_b_refs.bin`, `box_b_ivf_centroids.bin`) continuam sendo escritos como mirror — o
+  `bench/` brute-force e ferramentas antigas ainda os lêem.
+
+- **A escolha de NLIST=512 é dominada pela constraint de recall top-5, não pelo custo balance.**
+  A math do IVF prevê `nlist* ≈ √(nprobe·N) ≈ 1845` (para nprobe=16, N=212k). Empiricamente,
+  NLIST≥1024 introduz 1-3 fn no test set oficial porque queries borderline têm os 5 vizinhos
+  espalhados por múltiplos clusters menores que nprobe não cobre. NLIST=512 + nprobe=16 mantém
+  6000/6000 e é o ponto de menor latência sem mismatches. Documentado no sweep do commit do i16
+  kernel.
+
+- **O k-means do `export_box_b.py` roda até convergência total** (zero point reassignments entre
+  iters). `ITER` é apenas safety cap (default 1000); convergência típica em ~100 iters. Ler isso
+  como "rode o número certo" — não diminua o cap pra acelerar.
 
 - **Os refs e labels em `box_b_*.bin` estão ordenados pela atribuição de cluster IVF**, com
   `box_b_ivf_offsets.bin` como offsets CSR de linha. O slow path lê cada cluster sondado como uma

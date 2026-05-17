@@ -24,7 +24,12 @@ fn clamp01(x: f32) -> f32 {
 
 /// Returns `Err(())` on any malformed input. Production rinha payloads don't
 /// trip this; failure is treated as approve at the call site.
-pub fn vectorize(body: &[u8], out: &mut [f32; 16]) -> Result<(), ()> {
+///
+/// `out_q` is the f32 vector consumed by the router (and as the loop input
+/// of the round4 step). `out_i16` is the int16 mirror (scale=10000) used by
+/// the slow path; bit-exact on the round4 grid since `vectorize` itself
+/// snaps every dim to k/10000. Padding dims (14, 15) are zero in both.
+pub fn vectorize(body: &[u8], out: &mut [f32; 16], out_i16: &mut [i16; 16]) -> Result<(), ()> {
     let mut cur = 0usize;
 
     // ---- order matches data-generator/main.c ----
@@ -94,11 +99,18 @@ pub fn vectorize(body: &[u8], out: &mut [f32; 16]) -> Result<(), ()> {
     // generator (data-generator/main.c:774) before its kNN, and required so
     // we tie-break the same way on the rare queries where rank-5 vs rank-6
     // are within ~1e-5 of each other in raw float (e.g. test entry 5472).
+    //
+    // The int16 mirror is derived from the same rounded integer `k` so it
+    // is exact wrt the f32 vector — no double-rounding drift.
     for i in 0..14 {
-        out[i] = (out[i] * 10000.0).round() / 10000.0;
+        let k = (out[i] * 10000.0).round();
+        out[i] = k / 10000.0;
+        out_i16[i] = k as i16;
     }
     out[14] = 0.0;
     out[15] = 0.0;
+    out_i16[14] = 0;
+    out_i16[15] = 0;
 
     Ok(())
 }

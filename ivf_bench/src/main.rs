@@ -6,10 +6,14 @@
 //! Recall is computed against a brute-force ground-truth file (optional;
 //! defaults to data/rust_results.bin from the bench/ crate).
 //!
+//! Vectors are int16 with scale=10000. The query file (`stress_queries.bin`)
+//! is still f32 — we quantize it once at startup (it stays on the round4
+//! grid, so the cast is exact).
+//!
 //! Inputs (env vars):
-//!   REFS         path to refs.bin       (f32 × N × 16, padded, sorted by cluster)
+//!   REFS         path to refs.i16.bin   (i16 × N × 16, padded, sorted by cluster)
 //!   LABELS       path to labels.bin     (u8  × N,      sorted same as refs)
-//!   CENTROIDS    path to centroids.bin  (f32 × nlist × 16, padded)
+//!   CENTROIDS    path to centroids.i16.bin (i16 × nlist × 16, padded)
 //!   OFFSETS      path to offsets.bin    (u32 × nlist+1, CSR row offsets)
 //!   QUERIES      path to query vectors  (f32 × Q × 16, padded; default
 //!                                       data/stress_queries.bin = 100k)
@@ -37,17 +41,15 @@ const PREFETCH_AHEAD: usize = 8;
 
 // === Kernel — kept in sync with backend/src/slow_path.rs ===========
 
-#[target_feature(enable = "avx2,fma")]
+#[target_feature(enable = "avx2")]
 #[inline]
-unsafe fn distance(q0: __m256, q1: __m256, r_ptr: *const f32) -> f32 {
-    let r0 = _mm256_loadu_ps(r_ptr);
-    let r1 = _mm256_loadu_ps(r_ptr.add(8));
-    let diff0 = _mm256_sub_ps(q0, r0);
-    let diff1 = _mm256_sub_ps(q1, r1);
-    let sq0 = _mm256_mul_ps(diff0, diff0);
-    let sum = _mm256_fmadd_ps(diff1, diff1, sq0);
-    let hi = _mm256_extractf128_ps::<1>(sum);
-    let lo = _mm256_castps256_ps128(sum);
+unsafe fn distance_i16(q: __m256i, r_ptr: *const i16) -> f32 {
+    let r = _mm256_loadu_si256(r_ptr as *const __m256i);
+    let diff = _mm256_sub_epi16(q, r);
+    let dot = _mm256_madd_epi16(diff, diff);
+    let dot_f = _mm256_cvtepi32_ps(dot);
+    let hi = _mm256_extractf128_ps::<1>(dot_f);
+    let lo = _mm256_castps256_ps128(dot_f);
     let s128 = _mm_add_ps(hi, lo);
     let shuf = _mm_shuffle_ps::<0b10_11_00_01>(s128, s128);
     let s1 = _mm_add_ps(s128, shuf);
@@ -84,18 +86,17 @@ fn insert_top_centroid(top_d: &mut [f32], top_idx: &mut [u32], d: f32, c: u32) {
     }
 }
 
-#[target_feature(enable = "avx2,fma")]
+#[target_feature(enable = "avx2")]
 unsafe fn ivf_k5(
-    query: &[f32; D_PADDED],
-    centroids: &[f32],
+    query: &[i16; D_PADDED],
+    centroids: &[i16],
     offsets: &[u32],
-    refs: &[f32],
+    refs: &[i16],
     labels: &[u8],
     nprobe: usize,
 ) -> u8 {
     let nlist = offsets.len() - 1;
-    let q0 = _mm256_loadu_ps(query.as_ptr());
-    let q1 = _mm256_loadu_ps(query.as_ptr().add(8));
+    let q = _mm256_loadu_si256(query.as_ptr() as *const __m256i);
 
     let mut top_c_d_buf = [f32::INFINITY; MAX_NPROBE];
     let mut top_c_idx_buf = [0u32; MAX_NPROBE];
@@ -103,7 +104,7 @@ unsafe fn ivf_k5(
     let top_c_idx = &mut top_c_idx_buf[..nprobe];
     let cptr = centroids.as_ptr();
     for c in 0..nlist {
-        let d = distance(q0, q1, cptr.add(c * D_PADDED));
+        let d = distance_i16(q, cptr.add(c * D_PADDED));
         insert_top_centroid(top_c_d, top_c_idx, d, c as u32);
     }
 
@@ -123,12 +124,12 @@ unsafe fn ivf_k5(
             let row = start + i;
             let pf_ptr = rptr.add((row + PREFETCH_AHEAD) * D_PADDED) as *const i8;
             _mm_prefetch::<{ _MM_HINT_T0 }>(pf_ptr);
-            let d = distance(q0, q1, rptr.add(row * D_PADDED));
+            let d = distance_i16(q, rptr.add(row * D_PADDED));
             insert_top_k_refs(&mut best_d, &mut best_idx, d, row as u32);
         }
         for i in n_pf..count {
             let row = start + i;
-            let d = distance(q0, q1, rptr.add(row * D_PADDED));
+            let d = distance_i16(q, rptr.add(row * D_PADDED));
             insert_top_k_refs(&mut best_d, &mut best_idx, d, row as u32);
         }
     }
@@ -171,15 +172,15 @@ fn env_or_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
 }
 
 fn main() {
-    if !is_x86_feature_detected!("avx2") || !is_x86_feature_detected!("fma") {
-        panic!("AVX2 + FMA required");
+    if !is_x86_feature_detected!("avx2") {
+        panic!("AVX2 required");
     }
 
     let nlist_label = env_or("NLIST_LABEL", "?");
-    let refs_path = env_or("REFS", "data/ivf_sweep/nlist256/refs.bin");
-    let labels_path = env_or("LABELS", "data/ivf_sweep/nlist256/labels.bin");
-    let centroids_path = env_or("CENTROIDS", "data/ivf_sweep/nlist256/centroids.bin");
-    let offsets_path = env_or("OFFSETS", "data/ivf_sweep/nlist256/offsets.bin");
+    let refs_path = env_or("REFS", "data/box_b_refs.i16.bin");
+    let labels_path = env_or("LABELS", "data/box_b_labels.bin");
+    let centroids_path = env_or("CENTROIDS", "data/box_b_ivf_centroids.i16.bin");
+    let offsets_path = env_or("OFFSETS", "data/box_b_ivf_offsets.bin");
     let queries_path = env_or("QUERIES", "data/stress_queries.bin");
     let gt_path = env_or("GROUND_TRUTH", "data/rust_results.bin");
     let nprobe: usize = env_or_parse("NPROBE", 16usize);
@@ -197,18 +198,31 @@ fn main() {
     touch_pages(offs_bytes);
     touch_pages(q_bytes);
 
-    let refs: &'static [f32] = bytemuck::cast_slice(refs_bytes);
+    let refs: &'static [i16] = bytemuck::cast_slice(refs_bytes);
     let labels: &'static [u8] = labels_bytes;
-    let centroids: &'static [f32] = bytemuck::cast_slice(cent_bytes);
+    let centroids: &'static [i16] = bytemuck::cast_slice(cent_bytes);
     let offsets: &'static [u32] = bytemuck::cast_slice(offs_bytes);
-    let queries: &'static [f32] = bytemuck::cast_slice(q_bytes);
+    let queries_f32: &'static [f32] = bytemuck::cast_slice(q_bytes);
 
-    let n_q_full = queries.len() / D_PADDED;
+    let n_q_full = queries_f32.len() / D_PADDED;
     let n_q = n_q_full.min(n_queries_cap.max(warmup + 1));
     let nlist = offsets.len() - 1;
     assert!(nprobe >= 1 && nprobe <= nlist.min(MAX_NPROBE), "bad nprobe");
     assert_eq!(refs.len(), labels.len() * D_PADDED, "refs/labels mismatch");
     assert_eq!(centroids.len(), nlist * D_PADDED, "centroids/offsets mismatch");
+
+    // Pre-quantize the timed slice of queries once. The f32 file is on the
+    // round4 grid (rounded by the data generator that produced it), so the
+    // cast is exact. Leaks the buffer so the timed loop can use &'static.
+    let total_timed = n_q; // includes warmup
+    let mut q_i16_buf: Vec<i16> = Vec::with_capacity(total_timed * D_PADDED);
+    for qi in 0..total_timed {
+        for d in 0..D_PADDED {
+            let v = queries_f32[qi * D_PADDED + d];
+            q_i16_buf.push((v * 10000.0).round() as i16);
+        }
+    }
+    let queries_i16: &'static [i16] = Box::leak(q_i16_buf.into_boxed_slice());
 
     // Optional ground-truth file (brute-force fraud counts from the bench
     // crate). We compare against it on the post-warmup samples to compute
@@ -226,7 +240,7 @@ fn main() {
     {
         let mut sink: u32 = 0;
         for qi in 0..warmup.min(n_q) {
-            let q: &[f32; D_PADDED] = (&queries[qi * D_PADDED..qi * D_PADDED + D_PADDED])
+            let q: &[i16; D_PADDED] = (&queries_i16[qi * D_PADDED..qi * D_PADDED + D_PADDED])
                 .try_into()
                 .unwrap();
             let v = unsafe { ivf_k5(q, centroids, offsets, refs, labels, nprobe) };
@@ -242,7 +256,7 @@ fn main() {
     let mut answers: Vec<u8> = Vec::with_capacity(n_q.saturating_sub(warmup));
     let total_t0 = Instant::now();
     for qi in warmup..n_q {
-        let q: &[f32; D_PADDED] = (&queries[qi * D_PADDED..qi * D_PADDED + D_PADDED])
+        let q: &[i16; D_PADDED] = (&queries_i16[qi * D_PADDED..qi * D_PADDED + D_PADDED])
             .try_into()
             .unwrap();
         let t0 = Instant::now();

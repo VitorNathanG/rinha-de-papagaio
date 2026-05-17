@@ -49,9 +49,9 @@ const RESPONSES: [&[u8]; 6] = [
 
 struct AppState {
     weights: router::Weights,
-    refs: &'static [f32],
+    refs: &'static [i16],
     labels: &'static [u8],
-    centroids: &'static [f32],
+    centroids: &'static [i16],
     offsets: &'static [u32],
     nprobe: usize,
 }
@@ -146,12 +146,13 @@ async fn handle(
             };
 
             let mut v = [0f32; 16];
-            let count: u8 = if vectorize::vectorize(&body, &mut v).is_ok() {
+            let mut v_i16 = [0i16; 16];
+            let count: u8 = if vectorize::vectorize(&body, &mut v, &mut v_i16).is_ok() {
                 let probs = router::infer(&state.weights, &v);
                 if probs[2] > 0.5 {
                     unsafe {
                         slow_path::ivf_k5(
-                            &v,
+                            &v_i16,
                             state.centroids,
                             state.offsets,
                             state.refs,
@@ -220,11 +221,11 @@ fn touch_pages(bytes: &[u8]) {
 
 fn load_state() -> AppState {
     let refs_path =
-        std::env::var("REFS_PATH").unwrap_or_else(|_| "data/box_b_refs.bin".to_string());
+        std::env::var("REFS_PATH").unwrap_or_else(|_| "data/box_b_refs.i16.bin".to_string());
     let labels_path =
         std::env::var("LABELS_PATH").unwrap_or_else(|_| "data/box_b_labels.bin".to_string());
     let centroids_path = std::env::var("CENTROIDS_PATH")
-        .unwrap_or_else(|_| "data/box_b_ivf_centroids.bin".to_string());
+        .unwrap_or_else(|_| "data/box_b_ivf_centroids.i16.bin".to_string());
     let offsets_path = std::env::var("OFFSETS_PATH")
         .unwrap_or_else(|_| "data/box_b_ivf_offsets.bin".to_string());
     let weights_path =
@@ -244,9 +245,9 @@ fn load_state() -> AppState {
     touch_pages(centroids_bytes);
     touch_pages(offsets_bytes);
 
-    let refs: &'static [f32] = bytemuck::cast_slice(refs_bytes);
+    let refs: &'static [i16] = bytemuck::cast_slice(refs_bytes);
     let labels: &'static [u8] = labels_bytes;
-    let centroids: &'static [f32] = bytemuck::cast_slice(centroids_bytes);
+    let centroids: &'static [i16] = bytemuck::cast_slice(centroids_bytes);
     let offsets: &'static [u32] = bytemuck::cast_slice(offsets_bytes);
 
     let weights_bytes = std::fs::read(&weights_path)
