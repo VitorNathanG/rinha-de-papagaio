@@ -1,0 +1,27 @@
+# Exclude everything by default, then re-include only what the image needs.
+# Keeps the build context tiny (otherwise data/ alone is ~345 MB and
+# backend/target is ~360 MB).
+*
+
+# Re-include backend sources & manifests (note: each directory level must be
+# allowed before its contents).
+!backend
+backend/*
+!backend/Cargo.toml
+!backend/Cargo.lock
+!backend/.cargo
+!backend/src
+
+# Re-include only the 5 runtime artefacts baked into the image.
+!data
+data/*
+!data/box_b_refs.bin
+!data/box_b_labels.bin
+!data/box_b_ivf_centroids.bin
+!data/box_b_ivf_offsets.bin
+!data/router_weights.bin
+
+# Defensive: never ship build artefacts even if a parent allow leaks through.
+**/target
+**/__pycache__
+**/.git
