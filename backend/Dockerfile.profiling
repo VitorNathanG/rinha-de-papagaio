@@ -1,0 +1,47 @@
+# Dockerfile.profiling — Imagem equivalente em performance à release, com
+# line-tables debug info pra perf/flamegraph resolver símbolos. Usada via
+# docker-compose.profiling.yml. NÃO é o que vai pra produção.
+FROM rust:1.93-slim AS builder
+
+WORKDIR /build
+
+COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/.cargo ./.cargo
+
+# RUSTFLAGS = baseline do .cargo/config (target-cpu=haswell) + frame pointers.
+# Frame pointers permitem que `perf --call-graph fp` ande na stack sem .debug_frame
+# (que `line-tables-only` não emite). Custo runtime: 1 registrador reservado.
+ENV RUSTFLAGS="-C target-cpu=haswell -C force-frame-pointers=yes"
+
+# Pré-fetch das deps com src dummy. cargo respeita Cargo.lock.
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs \
+ && cargo build --profile profiling \
+ && rm -rf src target/profiling/deps/papagaio_api*
+
+COPY backend/src ./src
+RUN cargo build --profile profiling
+
+FROM debian:trixie-slim
+
+# Roda como UID 1000 (mesmo do host) pra que `perf record -p PID` no host
+# consiga atachar sem CAP_SYS_PTRACE. /var/run/papagaio é volume compartilhado
+# com o nginx — pré-criado com a ownership certa pra o bind do UNIX socket
+# funcionar sem chown em runtime.
+RUN groupadd -g 1000 papagaio \
+ && useradd  -u 1000 -g 1000 -M -s /usr/sbin/nologin papagaio \
+ && mkdir -p /var/run/papagaio \
+ && chown 1000:1000 /var/run/papagaio \
+ && chmod 0777 /var/run/papagaio
+
+WORKDIR /app
+COPY --from=builder /build/target/profiling/papagaio-api /usr/local/bin/papagaio-api
+COPY data/box_b_refs.i16.bin \
+     data/box_b_labels.bin \
+     data/box_b_ivf_centroids.i16.bin \
+     data/box_b_ivf_offsets.bin \
+     data/router_weights.bin \
+     ./data/
+
+USER 1000:1000
+EXPOSE 9999
+CMD ["/usr/local/bin/papagaio-api"]

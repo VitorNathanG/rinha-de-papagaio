@@ -1,0 +1,14 @@
+# docker-compose.profiling.yml — override usado APENAS para sessões de profile.
+services:
+  api1:
+    build:
+      dockerfile: backend/Dockerfile.profiling
+    image: papagaio-api:profiling
+    cpuset: "1"
+
+  api2:
+    image: papagaio-api:profiling
+    cpuset: "2"
+
+  lb:
+    cpuset: "0"

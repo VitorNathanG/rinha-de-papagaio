@@ -21,9 +21,12 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
-# Same codegen as release but keeps line tables so `perf` / flamegraphs
-# resolve symbols. Build with `cargo build --profile profiling`.
+# Same codegen as release com debug info completo (DWARF inline DIEs +
+# .debug_info) pra `perf annotate` mostrar fonte interlaçado e
+# `perf report --inline` expandir inlines de handle::{{closure}}. Custo
+# runtime: zero (debug info fica numa seção separada). Custo binário:
+# ~10-20x mais bytes, mas a imagem profiling não vai pra produção.
 [profile.profiling]
 inherits = "release"
-debug = "line-tables-only"
+debug = "full"
 strip = false
